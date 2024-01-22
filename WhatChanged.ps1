@@ -1,7 +1,30 @@
+
 # Function to get current record counts of all logs
 function Get-LogCounts {
     Get-WinEvent -ListLog * | Where-Object { $_.RecordCount -ne 0 } | 
     Select-Object LogName, RecordCount
+}
+
+# Function to get the events between two counts and save them to CSV files
+function Get-EventsBetweenCounts($firstCounts, $secondCounts) {
+    $timestamp = Get-Date -Format "yyyyMMddHHmmss"
+    foreach ($log in $secondCounts) {
+        $firstCount = $firstCounts | Where-Object { $_.LogName -eq $log.LogName }
+        if ($firstCount) {
+            $difference = $log.RecordCount - $firstCount.RecordCount
+            Write-Host "Number is different -  $difference $($log.RecordCount) minus $($firstCount.RecordCount)"
+            if ($difference -gt 0) {
+                $events = Get-WinEvent -LogName $log.LogName -MaxEvents $difference | Sort-Object TimeCreated
+                Write-Host "$events"
+                if ($events) {
+                    $safeLogName = $log.LogName -replace "\/", "_"
+                    $csvPath = "C:\path\${safeLogName}_NewEvents$timestamp.csv"
+                    $events | Select-Object TimeCreated, Id, LevelDisplayName, Message, ProviderName, LogName, TaskDisplayName, MachineName, UserId | Export-Csv -Path $csvPath -NoTypeInformation
+                    Write-Host "New events from $($log.LogName) have been saved to $csvPath"
+                }
+            }
+        }
+    }
 }
 
 Write-Host "Capturing initial event log counts..."
@@ -17,35 +40,9 @@ do {
     $elapsedSeconds = ($currentTime - $startTime).TotalSeconds
 } while ($input.Key -ne "P")
 
-
 # Capture the second set of record counts
 Write-Host "Capturing event log counts after $elapsedSeconds seconds..."
 $secondCounts = Get-LogCounts
 
-# Compare the counts and identify logs with increased record numbers
-Write-Host "Comparing event log counts..."
-$logsIncreased = Compare-Object -ReferenceObject $firstCounts -DifferenceObject $secondCounts `
-                 -Property LogName, RecordCount | 
-                 Where-Object { $_.SideIndicator -eq "=>" }
-
-# Extract events from the logs that have increased and save to CSV
-foreach ($log in $logsIncreased) {
-    $logName = $log.LogName
-    $oldCount = ($firstCounts | Where-Object { $_.LogName -eq $logName }).RecordCount
-    Write-Host "Checking new events for $logName..."
-    $newEvents = Get-WinEvent -LogName $logName | 
-                 Where-Object { $_.RecordId -gt $oldCount }
-
-    $newEventCount = $newEvents.Count
-    Write-Host "Found $newEventCount new events in $logName."
-
-    # Replace backslashes in the log name with underscores for the filename
-    $timestamp = Get-Date -Format "yyyyMMddHHmmss"
-    $safeLogName = $logName -replace "\/", "_"
-    $csvPath = "C:\path\${safeLogName}_NewEvents$timestamp.csv"
-
-    $newEvents | Select-Object TimeCreated, Id, LevelDisplayName, Message, ProviderName, LogName, TaskDisplayName, MachineName, UserId | Export-Csv -Path $csvPath -NoTypeInformation
-    Write-Host "New events from $logName have been saved to $csvPath"
-}
-
-Write-Host "Script execution completed."
+# Get the events that occurred between the first and second count and save them to CSV files
+Get-EventsBetweenCounts -firstCounts $firstCounts -secondCounts $secondCounts
